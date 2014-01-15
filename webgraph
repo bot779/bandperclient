@@ -1,0 +1,122 @@
+#!/bin/sh
+# webgraph
+#
+# William Burns
+#
+# Use Google Charts to:
+# Make a pie chart given 2 columns of data on stdin
+# (Label and Value)
+#
+# Got questions?
+# Ask google.
+# https://google-developers.appspot.com/chart/interactive/docs/basic_load_libs
+#
+
+
+GRAPHTITLE="Graph Title"
+FILENAME="webgraph"
+TYPE="Pie"
+
+while echo $1 |grep "^-" >/dev/null
+do
+  case $1 in
+    "--filename" )
+      FILENAME=$2
+      shift;shift
+      ;;
+    "--title" )
+      GRAPHTITLE=$2
+      shift;shift
+      ;;
+    "--type" )
+      # pie, bar or column
+      TYPE=`echo $2|sed 's/^\(.\)/\u\1/'`
+      shift;shift
+      ;;
+    * )
+      echo webgraph:
+      echo "  Turn 2 columns of data into an html pie chart."
+      echo "  each row should contain a label and a value"
+      echo OPTIONS
+      echo "  --filename stdout"
+      echo "  --title Graph_Title"
+      echo "  --type pie|bar|column"
+      exit
+  esac
+done
+
+
+(
+cat <<EEooFF
+<html>
+<head>
+<!--Load the AJAX API-->
+<script type="text/javascript" src="https://www.google.com/jsapi"></script>
+<script type="text/javascript">
+
+// Load the Visualization API and the piechart package.
+google.load('visualization', '1.0', {'packages':['corechart']});
+
+// Set a callback to run when the Google Visualization API is loaded.
+google.setOnLoadCallback(drawChart);
+
+// Callback that creates and populates a data table,
+// instantiates the pie chart, passes in the data and
+// draws it.
+function drawChart() {
+
+// Create the data table.
+var data = new google.visualization.DataTable();
+data.addColumn('string', 'Label');
+data.addColumn('number', 'Quantity');
+data.addRows([
+EEooFF
+NOTFIRSTRUN=false
+LINECOUNT=0
+while read LABEL VALUE JUNK
+do
+  let LINECOUNT=$LINECOUNT+1
+  $NOTFIRSTRUN && echo ","
+  NOTFIRSTRUN=true
+  echo -e "['$LABEL', $VALUE]\c"
+done
+echo
+#['Apple_][e', 99543],
+#['C64', 32768],
+#['TRS-80', 40960],
+#['Apple_Newton', 59468],
+#['sinclair_ZX80', 31415]
+echo "]);"
+echo
+echo "// Set chart options"
+echo "var options = {'title':'$GRAPHTITLE',"
+echo "'width':1024,"
+HEIGHT=768
+if [ "$TYPE" = "Bar" ]
+then
+  let HEIGHT=150+$LINECOUNT*25
+fi
+echo "'height':${HEIGHT}};"
+cat <<EEooFF
+
+// Instantiate and draw our chart, passing in some options.
+var chart = new google.visualization.${TYPE}Chart(document.getElementById('chart_div'));
+chart.draw(data, options);
+}
+</script>
+</head>
+
+<body>
+<!--Div that will hold the pie chart-->
+<div id="chart_div" style="width:400; height:300"></div>
+</body>
+</html>
+EEooFF
+) \
+| if [ "$FILENAME" = "stdout" ]
+then
+  cat
+else
+  FILENAME=`echo $FILENAME|sed '/.html$/!s/$/.html/'`
+  cat > $FILENAME
+fi
