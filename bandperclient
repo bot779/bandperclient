@@ -1,0 +1,467 @@
+#!/bin/sh
+# bandperclient
+
+NOREPORT=false
+SLOW=true
+WEBGRAPH=false
+TOP=30
+PLOTLIST=""
+CR="
+"
+
+while echo $1 |grep "^-" >/dev/null
+do
+  case $1 in
+    "--quick" )
+      SLOW=false
+      shift
+      ;;
+    "--webgraph" )
+      WEBGRAPH=true
+      shift
+      ;;
+    "--txb" )
+      PLOTLIST="${PLOTLIST}txb$CR"
+      shift
+      ;;
+    "--txp" )
+      PLOTLIST="${PLOTLIST}txp$CR"
+      shift
+      ;;
+    "--rxb" )
+      PLOTLIST="${PLOTLIST}rxb$CR"
+      shift
+      ;;
+    "--rxp" )
+      PLOTLIST="${PLOTLIST}rxp$CR"
+      shift
+      ;;
+    "--txr" )
+      PLOTLIST="${PLOTLIST}txr$CR"
+      shift
+      ;;
+    "--count" )
+      PLOTLIST="${PLOTLIST}count$CR"
+      shift
+      ;;
+    "--roam" )
+      PLOTLIST="${PLOTLIST}roam$CR"
+      shift
+      ;;
+    "--roamnophone" )
+      PLOTLIST="${PLOTLIST}roamnophone$CR"
+      shift
+      ;;
+    "--top" )
+      TOP=$2
+      shift;shift
+      ;;
+    "--noreport" )
+      NOREPORT=true
+      shift
+      ;;
+    "--help" | "--?" )
+      echo "bandperclient: (bandwidth per client)"
+      echo "Creates a series of traffic reports (including bandwidth per client)"
+      echo "based on syslog messages from ruckus controllers"
+      echo
+      echo Usage:
+      echo "bandperclient [OPTIONS] [</var/log/messages>]"
+      echo " If the word 'stdin' is substituted for a /var/log/messages file:"
+      echo "  bandperclient will expect to read syslog entries on standard input"
+      echo
+      echo " Options:"
+      echo " --noreport ;# suppress reporting. Only process syslog messages"
+      echo " --quick    ;# don't read or process syslog messages. Just do reporting."
+      echo " --webgraph ;# build html reports (instead of the default text versions)"
+      echo " --txb      ;# report on transmitted bytes"
+      echo " --txp      ;# report on transmitted packets"
+      echo " --rxb      ;# report on received bytes"
+      echo " --rxp      ;# report on received packets"
+      echo " --txr      ;# report on transmit retry packets"
+      echo " --count    ;# number of associated clients per OS"
+      echo " --roam     ;# roaming events"
+      echo " --roamnophone ;# roaming events excluding iOS or Android devices"
+      echo " --top <n>  ;# report on the top <n> devices"
+      echo
+      exit
+      ;;
+    * )
+      echo bandperclient:
+      echo Error: unrecognized option $1
+      echo "'bandperclient --help' gives help" 
+      exit
+      ;;
+  esac
+done
+
+if [ "$PLOTLIST" = "" ]
+then
+  if $WEBGRAPH
+  then
+    PLOTLIST="txb${CR}rxb${CR}roam${CR}roamnophone${CR}count${CR}"
+  else
+    PLOTLIST="txb${CR}txp${CR}rxb${CR}rxp${CR}txr${CR}roam${CR}roamnophone${CR}"
+  fi
+fi
+
+#echo PLOTLIST is $PLOTLIST
+
+#work directory
+BWDATA=./bwdata
+DEBUG=true
+DEBUG=false
+
+if $SLOW
+then
+
+rm -r bwdata.old
+mv $BWDATA $BWDATA.old
+mkdir $BWDATA
+
+if [ ! -d $BWDATA ]
+then
+  echo Work directory $BWDATA not available
+  exit
+fi
+
+if [ "$VARLOGMESSAGES" = stdin ]
+then
+  cat
+else
+
+  VARLOGMESSAGES=messages
+  VARLOGMESSAGES=${1:-$VARLOGMESSAGES}
+  if [ ! -r $VARLOGMESSAGES ]
+  then
+    if [ -e $VARLOGMESSAGES ]
+    then
+      echo "could not read '${VARLOGMESSAGES}'. due to permissions?"
+      exit
+    fi
+    VARLOGMESSAGES=/var/log/$VARLOGMESSAGES
+    if [ ! -r $VARLOGMESSAGES ]
+    then
+      echo "could not read '${VARLOGMESSAGES}'"
+      exit
+    fi
+  fi
+
+  cat $VARLOGMESSAGES
+fi \
+| grep -e "acsrvc_display_sta_stats()" -e "acsrvc_thread().*last stats reported from unmatched VAP" \
+| sed 's/^\([^ ]*\) \([^ ]*\) \([^ ]*\) .*\(Retrieved STA Statistics for.*\)$/\1-\2-\3 \4/' \
+| sed 's/^.*()://' \
+| sed -e 's/Retrieved STA Statistics for/MAC= /' \
+      -e 's/tx_packets =/txp=/' -e 's/tx_bytes =/txb=/' \
+      -e 's/rx_packets =/rxp=/' -e 's/rx_bytes =/rxb=/' \
+      -e 's/tx_xretries =/txr=/' -e's/tx_xretry_bytes =/txrb=/' \
+      -e 's/tx_power =/pwr=/' -e 's/channelization =/chz=/' \
+      -e 's/sta_rssi =/snr=/' -e 's/tx_rate =/rate=/' \
+| sed -e 's/^\(.*\) station of VAP \(.*\), last stats reported from unmatched VAP \([^ ]*\) *$/NODATE MAC \1 Roams from \3 to \2/' \
+| sed -e ":a" -e '/^.*[^ ]= .*$/{N;s/ *\n *\( .*[^ ]= .*\)$/\1/;ta}' \
+| grep -v "^ *$" \
+| while read DATE L1 D1 L2 D2 L3 D3 L4 D4 L5 D5 L6 D6 L7 D7 L8 D8 L9 D9 L10 D10 L11 D11 JUNK
+do 
+  if [ "$L1 $L2 $L3 $L4 $L5 $L6 $L7 $L8 $L9 $L10 $L11" = "MAC= txp= txb= rxp= rxb= txr= txrb= pwr= chz= snr= rate=" ]
+  then
+    echo "$DATE $L1 $D1 $D2 $D3 $D4 $D5 $D6 $D7 $D8 $D9 $D10 $D11" >> "$BWDATA/CUM$D1"
+    $DEBUG && echo $DATE $L1 $D1 $L2 $D2 $L3 $D3 $L4 $D4 $L5 $D5
+    $DEBUG && echo
+  else
+    if [ "$L1 $L2 $D2" = "MAC Roams from" ]
+    then
+      echo ROAM FROM-${L3}-TO-${L4} $D1 >> "$BWDATA/CUM$D1"
+    else
+      echo "???? $L1 $L2 $L3 $L4 $L5"
+    fi
+    echo $DATE $L1 $D1 $L2 $D2 $L3 $D3 $L4 $D4 $L5 $D5
+  fi
+done
+
+echo
+echo BING! BING! BING!
+echo Log data ingested.
+echo
+echo Processing per-client files:
+(
+cd $BWDATA
+
+GTTXP=0;GTTXB=0;GTRXP=0;GTRXB=0;GTTXR=0;GTTXRB=0;GTROAM=0
+ls . \
+| while read FILENAME
+do
+  PTXP=0;PTXB=0;PRXP=0;PRXB=0;PTXR=0;PTXRB=0;PCHZ=0
+  TTXP=0;TTXB=0;TRXP=0;TRXB=0;TTXR=0;TTXRB=0;TROAM=0
+  cat $FILENAME \
+  |( \
+  while read DATE LMAC MAC D1 D2 D3 D4 D5 D6 PWR CHZ SNR RATE JUNK
+  do
+    if [ $DATE = ROAM ]
+    then
+      PTXP=0;PTXB=0;PRXP=0;PRXB=0;PTXR=0;PTXRB=0;PCHZ=1
+      echo $DATE $LMAC $MAC
+      let TROAM=TROAM+1
+    else  
+      if [ "$PCHZ" > 0 -a ! -z "$CHZ" ]
+      then
+        let TXP=$D1-$PTXP ; let TXB=$D2-$PTXB
+        let RXP=$D3-$PRXP ; let RXB=$D4-$PRXB
+        let TXR=$D5-$PTXR ; let TXRB=$D6-$PTXRB
+
+        let TTXP=$TTXP+TXP; let TTXB=$TTXB+$TXB
+        let TRXP=$TRXP+RXP; let TRXB=$TRXB+$RXB
+        let TTXR=$TTXR+TXR; let TTXRB=$TTXRB+TXRB
+
+        echo $DATE $LMAC $MAC $TXP $TXB $RXP $RXB $TXR $TXRB $PWR $CHZ $SNR $RATE $JUNK
+      fi
+      PTXP=$D1;PTXB=$D2;PRXP=$D3;PRXB=$D4;PTXR=$D5;PTXRB=$D6;PCHZ=$CHZ
+    fi
+    MAC2="$MAC"
+    #echo $MAC >&2
+  done 
+  #echo $MAC >&2
+  #echo $MAC2 >&2
+  GTTXP=$GTTXP+$TTXP;GTTXB=$GTTXB+$TTXB
+  GTRXP=$GTRXP+$TRXP;GTRXB=$GTRXB+$TRXB
+  GTTXR=$GTTXR+$TTXR;GTTXRB=$GTTXRB+$TTXRB
+  GTROAM=$GTROAM+$TROAM
+  
+  echo "TOTALS MAC= $MAC2" $TTXP $TTXB $TRXP $TRXB $TTXR $TTXRB 0 0 0 $TROAM \
+       `fgrep $MAC2 ../clientos.txt|head -1|sed -e 's/^[^ ]* //' -e 's/ /_/g' -e 's/__/_ _/'`
+  ) > $FILENAME.tmp
+  mv $FILENAME.tmp $FILENAME
+  echo $FILENAME
+done
+echo "GRANDTOT MAC= xx:xx:xx:xx:xx:xx" $GTTXP $GTTXB $GTRXP $GTRXB $GTTXR $GTTXRB 0 0 0 $GTROAM >grandtotals
+)
+
+fi # done with "if $SLOW"
+
+
+#Start making reports
+
+cd $BWDATA
+
+echo -e "$PLOTLIST\c" \
+| while read PLOT JUNK
+do
+
+# echo PLOT is $PLOT 2>&1
+
+case $PLOT in
+  txp )
+    SORTKEY="-k4,4n"
+    TITLE="Transmissions in Packets"
+    shift
+    ;;
+  txb )
+    SORTKEY="-k5,5n"
+    TITLE="Transmissions in Bytes"
+    shift
+    ;;
+  rxp )
+    SORTKEY="-k6,6n"
+    TITLE="Packets Received from Clients"
+    shift
+    ;;
+  rxb )
+    SORTKEY="-k7,7n"
+    TITLE="Bytes Received from Clients"
+    shift
+    ;;
+  txr )
+    SORTKEY="-k8,8n"
+    TITLE="Packets Retransmitted"
+    shift
+    ;;
+  txrb )
+    SORTKEY="-k9,9n"
+    TITLE="Bytes Retransmitted"
+    #The data is crap. Don't use this.
+    shift
+    ;;
+  roam )
+    SORTKEY="-k13,13n"
+    TITLE="roaming Events"
+    shift
+    ;;
+  roamnophone )
+    SORTKEY="-k13,13n"
+    TITLE="Roaming Events not including android or iOS"
+    shift
+    ;;
+  count )
+    SORTKEY="-k14,14n"
+    TITLE="Number of Clients"
+    shift
+    ;;
+esac
+  
+if ! $WEBGRAPH
+then
+  echo
+  echo $TITLE
+  echo Totals per OS:
+  echo OSTOTALS ___ ___ TXP TXB RXP RXB TXR TXRB _ _ _ ROAM COUNT OS
+fi
+TXP=0;TXB=0;RXP=0;RXB=0;TXR=0;TXRB=0;TROAM=0;COUNT=0;POS=nothing
+fgrep TOTALS * \
+|if [ "$PLOT" = roamnophone ]
+then
+  fgrep -v -e _Android_ -e _iOS_
+else
+  cat
+fi \
+|sort -k15,15 \
+|(while read DATE LMAC MAC D1 D2 D3 D4 D5 D6 PWR CHZ SNR ROAM NAME OS JUNK
+do
+  if [ "$OS" != "$POS" ]
+  then
+    [ ! "$POS" = "nothing" ] && \
+    echo OSTOTALS ___ ___ $TXP $TXB $RXP $RXB $TXR $TXRB _ _ _ $TROAM $COUNT $POS $JUNK
+    TXP=0;TXB=0;RXP=0;RXB=0;TXR=0;TXRB=0;TROAM=0;COUNT=0
+    POS="$OS"
+  fi
+  let TXP=TXP+$D1 ; let TXB=$TXB+$D2
+  let RXP=RXP+$D3 ; let RXB=$RXB+$D4
+  let TXR=$TXR+$D5 ; let TXRB=$TXRB+D6
+  let TROAM=$TROAM+$ROAM
+  let COUNT=$COUNT+1
+done
+echo OSTOTALS ___ ___ $TXP $TXB $RXP $RXB $TXR $TXRB _ _ _ $TROAM $COUNT $POS $JUNK
+) \
+| sort $SORTKEY \
+|if $WEBGRAPH
+then
+  case $PLOT in
+    "txp" )
+       sed 's/^[^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "txb" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "rxp" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "rxb" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "txr" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "txrb" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "roam" | "roamnophone" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]*\(.*\)$/\2 \1/'
+       ;;
+    "count" )
+       sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\)\(.*\)$/\2 \1/'
+       ;;
+  esac\
+  | sed -e 's/^ //' \
+        -e 's/^\([^ ]* [^ ]*\) .*$/\1/' \
+        -e 's/^\([^ ]*\) *$/_Unidentified_ \1/' \
+  | ../webgraph --title "$TITLE" --filename ../webgraph-$PLOT
+else
+  cat
+fi
+
+
+# Do the "top 30" reports
+
+case $PLOT in
+  "txp" )
+TITLE="Top $TOP by TX Packets:"
+SORTKEY="-k3,3n"
+    ;;
+  "txb" )
+TITLE="Top $TOP by TX bandwidth:"
+SORTKEY="-k4,4n"
+    ;;
+  "rxp" )
+TITLE="Top $TOP by RX Packets:"
+SORTKEY="-k5,5n"
+    ;;
+  "rxb" )
+TITLE="Top $TOP by RX bandwidth:"
+SORTKEY="-k6,6n"
+    ;;
+  "txr" )
+TITLE="Top $TOP by TX retransmit packets"
+SORTKEY="-k7,7n"
+    ;;
+  "txrb" )
+TITLE="Top $TOP by TX retransmit "'"bandwidth"'
+SORTKEY="-k8,8n"
+    ;;
+  "roam" )
+TITLE="Top $TOP by roaming events"
+SORTKEY="-k12,12n"
+    ;;
+  "roamnophone" )
+TITLE="Top $TOP roaming excluding Android and iOS"
+SORTKEY="-k12,12n"
+    ;;
+esac
+
+if ! $WEBGRAPH
+then
+  echo
+  echo $TITLE
+  echo MAC= MAC.ADDR TXP TXB RXP RXB TXR TXRB _ _ _ ROAM HOST OS
+fi
+
+if [ ! "$PLOT" = "count" ]
+then
+
+fgrep TOTALS * \
+| if [ "$PLOT" = roamnophone ]
+then
+  fgrep -v -e _Android_ -e _iOS_
+else
+  cat
+fi \
+| sed -e 's/^.*TOTALS MAC=/MAC=/' \
+| sort $SORTKEY \
+| tail -$TOP \
+|if $WEBGRAPH
+then
+  case $PLOT in
+    "txp" )
+       sed 's/[^ ]* \([^ ]*\) \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "txb" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "rxp" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "rxb" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "txr" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "txrb" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* *\(.*\)$/\1.\3 \2/'
+       ;;
+    "roam" | "roamnophone" )
+       sed 's/[^ ]* \([^ ]*\) [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]* \([^ ]*\) *\(.*\)$/\1.\3 \2/'
+       ;;
+  esac\
+  | sed -e 's/^\([^ ]*\) \([^ ]*\)$/\1 Unidentified \2/' \
+        -e 's/^\([^ ]*\) \([^ ]*\) \([^ ]*\).*$/\1.\2 \3/' \
+  | ../webgraph --title "$TITLE" --type bar --filename ../webgraph-top$PLOT
+else
+  cat
+fi
+
+fi ; # 'if [ ! "$PLOT" = "count" ]'
+
+! $WEBGRAPH && ( echo ; echo "------------------------------------" )
+
+
+done
+#with "while read $PLOT"
